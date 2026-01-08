@@ -18,11 +18,11 @@ locals {
   # Standard tags applied to all resources
   common_tags = merge(
     {
-      app_id        = var.app_id
-      environment   = var.environment
-      managed_by    = "terraform"
-      provisioned   = "subscription-vending"
-      repository    = "terraform-azure-infra-${var.app_id}"
+      app_id      = var.app_id
+      environment = var.environment
+      managed_by  = "terraform"
+      provisioned = "subscription-vending"
+      repository  = "terraform-azure-infra-${var.app_id}"
     },
     var.tags
   )
