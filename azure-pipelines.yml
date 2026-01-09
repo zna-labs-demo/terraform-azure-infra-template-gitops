@@ -1,12 +1,15 @@
 # =============================================================================
-# Azure DevOps CI Pipeline for Terraform Infrastructure
+# Azure DevOps CI/CD Pipeline for Terraform Infrastructure
 # =============================================================================
-# This pipeline runs on every PR and push to main, performing:
-# - Terraform format check
-# - Terraform validation
-# - TFLint static analysis
-# - Security scanning with tfsec
-# - Cost estimation (on PRs)
+# This pipeline performs:
+# - Quality gates on PRs (format, validate, lint, security)
+# - Progressive deployment: Dev -> QA -> Prod on main branch
+# - ADO Environment approval gates for QA and Production
+#
+# SETUP REQUIRED:
+#   1. Create ADO Environments: 'QA' and 'Production' with approval gates
+#   2. Add pipeline variable: TFC_TOKEN (secret) - your Terraform Cloud token
+#   3. Ensure TFC workspaces exist with appropriate tags
 # =============================================================================
 
 trigger:
@@ -29,10 +32,11 @@ pool:
 variables:
   TF_VERSION: '1.6.6'
   TFLINT_VERSION: 'v0.50.0'
+  TF_IN_AUTOMATION: 'true'
 
 stages:
   # ===========================================================================
-  # Stage 1: Quality Gates
+  # Stage 1: Quality Gates (runs on all PRs and main branch pushes)
   # ===========================================================================
   - stage: QualityGates
     displayName: 'Quality Gates'
@@ -92,10 +96,10 @@ stages:
               tfsec . --format lovely --minimum-severity MEDIUM
             displayName: 'Run tfsec Security Scan'
             workingDirectory: $(System.DefaultWorkingDirectory)
-            continueOnError: true  # Don't fail build, just report
+            continueOnError: true
 
   # ===========================================================================
-  # Stage 2: Plan (PR Only)
+  # Stage 2: Plan (PR Only) - Shows what TFC will apply
   # ===========================================================================
   - stage: Plan
     displayName: 'Terraform Plan'
@@ -103,7 +107,7 @@ stages:
     condition: and(succeeded(), eq(variables['Build.Reason'], 'PullRequest'))
     jobs:
       - job: TerraformPlan
-        displayName: 'Generate Plan'
+        displayName: 'Generate Plan Summary'
         steps:
           - script: |
               echo "## Terraform Plan Summary" >> $(System.DefaultWorkingDirectory)/plan-summary.md
@@ -124,23 +128,163 @@ stages:
             displayName: 'Publish Plan Summary'
 
   # ===========================================================================
-  # Stage 3: Notify (Main Branch Only)
+  # Stage 3: Dev Environment - Auto-deploys on push to main
   # ===========================================================================
-  - stage: Notify
-    displayName: 'Notify TFC'
+  - stage: Dev
+    displayName: 'Deploy to Dev'
     dependsOn: QualityGates
     condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
     jobs:
-      - job: TFCNotification
-        displayName: 'TFC Will Apply'
+      - job: TerraformDev
+        displayName: 'Terraform Dev'
         steps:
-          - script: |
+          - task: TerraformInstaller@1
+            displayName: 'Install Terraform $(TF_VERSION)'
+            inputs:
+              terraformVersion: $(TF_VERSION)
+
+          - bash: |
+              mkdir -p ~/.terraform.d
+              cat > ~/.terraform.d/credentials.tfrc.json << EOF
+              {
+                "credentials": {
+                  "app.terraform.io": {
+                    "token": "$(TFC_TOKEN)"
+                  }
+                }
+              }
+              EOF
+            displayName: 'Configure TFC Credentials'
+
+          - bash: |
               echo "=============================================="
-              echo "Quality gates passed!"
-              echo "Terraform Cloud will now pick up this change"
-              echo "and run plan/apply automatically."
+              echo "Deploying to DEV Environment"
+              echo "Environment file: environments/dev.tfvars"
               echo "=============================================="
-              echo ""
-              echo "Monitor your workspace at:"
-              echo "https://app.terraform.io/app/zna-labs/workspaces"
-            displayName: 'TFC Notification'
+              terraform init
+            displayName: 'Terraform Init (Dev)'
+            workingDirectory: $(System.DefaultWorkingDirectory)
+
+          - bash: |
+              terraform plan \
+                -var-file=environments/dev.tfvars \
+                -out=tfplan-dev
+            displayName: 'Terraform Plan (Dev)'
+            workingDirectory: $(System.DefaultWorkingDirectory)
+
+          - bash: |
+              terraform apply -auto-approve tfplan-dev
+            displayName: 'Terraform Apply (Dev)'
+            workingDirectory: $(System.DefaultWorkingDirectory)
+
+  # ===========================================================================
+  # Stage 4: QA Environment - Requires ADO Environment approval
+  # ===========================================================================
+  - stage: QA
+    displayName: 'Deploy to QA'
+    dependsOn: Dev
+    condition: succeeded()
+    jobs:
+      - deployment: TerraformQA
+        displayName: 'Terraform QA'
+        environment: 'QA'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: TerraformInstaller@1
+                  displayName: 'Install Terraform $(TF_VERSION)'
+                  inputs:
+                    terraformVersion: $(TF_VERSION)
+
+                - bash: |
+                    mkdir -p ~/.terraform.d
+                    cat > ~/.terraform.d/credentials.tfrc.json << EOF
+                    {
+                      "credentials": {
+                        "app.terraform.io": {
+                          "token": "$(TFC_TOKEN)"
+                        }
+                      }
+                    }
+                    EOF
+                  displayName: 'Configure TFC Credentials'
+
+                - bash: |
+                    echo "=============================================="
+                    echo "Deploying to QA Environment"
+                    echo "Environment file: environments/qa.tfvars"
+                    echo "=============================================="
+                    terraform init
+                  displayName: 'Terraform Init (QA)'
+                  workingDirectory: $(System.DefaultWorkingDirectory)
+
+                - bash: |
+                    terraform plan \
+                      -var-file=environments/qa.tfvars \
+                      -out=tfplan-qa
+                  displayName: 'Terraform Plan (QA)'
+                  workingDirectory: $(System.DefaultWorkingDirectory)
+
+                - bash: |
+                    terraform apply -auto-approve tfplan-qa
+                  displayName: 'Terraform Apply (QA)'
+                  workingDirectory: $(System.DefaultWorkingDirectory)
+
+  # ===========================================================================
+  # Stage 5: Production Environment - Requires ADO Environment approval
+  # ===========================================================================
+  - stage: Prod
+    displayName: 'Deploy to Prod'
+    dependsOn: QA
+    condition: succeeded()
+    jobs:
+      - deployment: TerraformProd
+        displayName: 'Terraform Prod'
+        environment: 'Production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: TerraformInstaller@1
+                  displayName: 'Install Terraform $(TF_VERSION)'
+                  inputs:
+                    terraformVersion: $(TF_VERSION)
+
+                - bash: |
+                    mkdir -p ~/.terraform.d
+                    cat > ~/.terraform.d/credentials.tfrc.json << EOF
+                    {
+                      "credentials": {
+                        "app.terraform.io": {
+                          "token": "$(TFC_TOKEN)"
+                        }
+                      }
+                    }
+                    EOF
+                  displayName: 'Configure TFC Credentials'
+
+                - bash: |
+                    echo "=============================================="
+                    echo "Deploying to PRODUCTION Environment"
+                    echo "Environment file: environments/prod.tfvars"
+                    echo "=============================================="
+                    terraform init
+                  displayName: 'Terraform Init (Prod)'
+                  workingDirectory: $(System.DefaultWorkingDirectory)
+
+                - bash: |
+                    terraform plan \
+                      -var-file=environments/prod.tfvars \
+                      -out=tfplan-prod
+                  displayName: 'Terraform Plan (Prod)'
+                  workingDirectory: $(System.DefaultWorkingDirectory)
+
+                - bash: |
+                    terraform apply -auto-approve tfplan-prod
+                  displayName: 'Terraform Apply (Prod)'
+                  workingDirectory: $(System.DefaultWorkingDirectory)

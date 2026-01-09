@@ -26,6 +26,47 @@ variable "environment" {
   }
 }
 
+# =============================================================================
+# ZNA Naming Components
+# =============================================================================
+# These variables support the ZNA naming standard:
+# Pattern: [prefix][app-id][tier][instance][env][sequence]
+# Example: a2026010501n1d01 -> App 2026010501, Non-Prod tier 1, Dev env, sequence 01
+# =============================================================================
+
+variable "tier" {
+  description = "Tier identifier for ZNA naming (n = non-production, p = production)"
+  type        = string
+  default     = "n"
+
+  validation {
+    condition     = contains(["n", "p"], var.tier)
+    error_message = "tier must be 'n' (non-production) or 'p' (production)."
+  }
+}
+
+variable "environment_code" {
+  description = "Environment code for ZNA naming (d = dev, q = qa, p = prod)"
+  type        = string
+  default     = "d"
+
+  validation {
+    condition     = contains(["d", "q", "p"], var.environment_code)
+    error_message = "environment_code must be 'd' (dev), 'q' (qa), or 'p' (prod)."
+  }
+}
+
+variable "sequence" {
+  description = "Sequence number for ZNA naming (e.g., 01, 02)"
+  type        = string
+  default     = "01"
+
+  validation {
+    condition     = can(regex("^[0-9]{2}$", var.sequence))
+    error_message = "sequence must be a 2-digit number (e.g., 01, 02)."
+  }
+}
+
 variable "location" {
   description = "Azure region for resource deployment"
   type        = string
