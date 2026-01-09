@@ -3,6 +3,17 @@
 # =============================================================================
 # This file configures the required providers for Azure infrastructure deployment.
 # The Azure subscription is automatically configured via TFC workspace variables.
+#
+# WORKSPACE SELECTION:
+# The CI/CD pipeline automatically sets TF_WORKSPACE environment variable to
+# select the correct workspace for each environment:
+#   - Dev:  {app_id}n1d01-app-infra
+#   - QA:   {app_id}n1q01-app-infra
+#   - Prod: {app_id}p1p01-app-infra
+#
+# For local development, set TF_WORKSPACE before running terraform commands:
+#   export TF_WORKSPACE="{app_id}n1d01-app-infra"
+#   terraform init
 # =============================================================================
 
 terraform {
@@ -20,7 +31,8 @@ terraform {
   }
 
   # Terraform Cloud workspace configuration
-  # The workspace is automatically created by the subscription vending process
+  # Workspaces are created by the subscription vending process (3 per app)
+  # TF_WORKSPACE environment variable overrides the tag selection in CI/CD
   cloud {
     organization = "zna-labs"
 

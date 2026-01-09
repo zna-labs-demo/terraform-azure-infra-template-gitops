@@ -33,6 +33,8 @@ variables:
   TF_VERSION: '1.6.6'
   TFLINT_VERSION: 'v0.50.0'
   TF_IN_AUTOMATION: 'true'
+  # Extract app_id from repo name (terraform-azure-infra-{app_id})
+  APP_ID: $[ replace(variables['Build.Repository.Name'], 'terraform-azure-infra-', '') ]
 
 stages:
   # ===========================================================================
@@ -134,6 +136,8 @@ stages:
     displayName: 'Deploy to Dev'
     dependsOn: QualityGates
     condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    variables:
+      WORKSPACE_NAME: $[ format('{0}n1d01-app-infra', variables['APP_ID']) ]
     jobs:
       - job: TerraformDev
         displayName: 'Terraform Dev'
@@ -159,13 +163,16 @@ stages:
           - bash: |
               echo "=============================================="
               echo "Deploying to DEV Environment"
-              echo "Environment file: environments/dev.tfvars"
+              echo "App ID: $(APP_ID)"
+              echo "Workspace: $(WORKSPACE_NAME)"
               echo "=============================================="
+              export TF_WORKSPACE="$(WORKSPACE_NAME)"
               terraform init
             displayName: 'Terraform Init (Dev)'
             workingDirectory: $(System.DefaultWorkingDirectory)
 
           - bash: |
+              export TF_WORKSPACE="$(WORKSPACE_NAME)"
               terraform plan \
                 -var-file=environments/dev.tfvars \
                 -out=tfplan-dev
@@ -173,6 +180,7 @@ stages:
             workingDirectory: $(System.DefaultWorkingDirectory)
 
           - bash: |
+              export TF_WORKSPACE="$(WORKSPACE_NAME)"
               terraform apply -auto-approve tfplan-dev
             displayName: 'Terraform Apply (Dev)'
             workingDirectory: $(System.DefaultWorkingDirectory)
@@ -184,6 +192,8 @@ stages:
     displayName: 'Deploy to QA'
     dependsOn: Dev
     condition: succeeded()
+    variables:
+      WORKSPACE_NAME: $[ format('{0}n1q01-app-infra', variables['APP_ID']) ]
     jobs:
       - deployment: TerraformQA
         displayName: 'Terraform QA'
@@ -215,13 +225,17 @@ stages:
                 - bash: |
                     echo "=============================================="
                     echo "Deploying to QA Environment"
+                    echo "App ID: $(APP_ID)"
+                    echo "Workspace: $(WORKSPACE_NAME)"
                     echo "Environment file: environments/qa.tfvars"
                     echo "=============================================="
+                    export TF_WORKSPACE="$(WORKSPACE_NAME)"
                     terraform init
                   displayName: 'Terraform Init (QA)'
                   workingDirectory: $(System.DefaultWorkingDirectory)
 
                 - bash: |
+                    export TF_WORKSPACE="$(WORKSPACE_NAME)"
                     terraform plan \
                       -var-file=environments/qa.tfvars \
                       -out=tfplan-qa
@@ -229,6 +243,7 @@ stages:
                   workingDirectory: $(System.DefaultWorkingDirectory)
 
                 - bash: |
+                    export TF_WORKSPACE="$(WORKSPACE_NAME)"
                     terraform apply -auto-approve tfplan-qa
                   displayName: 'Terraform Apply (QA)'
                   workingDirectory: $(System.DefaultWorkingDirectory)
@@ -240,6 +255,8 @@ stages:
     displayName: 'Deploy to Prod'
     dependsOn: QA
     condition: succeeded()
+    variables:
+      WORKSPACE_NAME: $[ format('{0}p1p01-app-infra', variables['APP_ID']) ]
     jobs:
       - deployment: TerraformProd
         displayName: 'Terraform Prod'
@@ -271,13 +288,17 @@ stages:
                 - bash: |
                     echo "=============================================="
                     echo "Deploying to PRODUCTION Environment"
+                    echo "App ID: $(APP_ID)"
+                    echo "Workspace: $(WORKSPACE_NAME)"
                     echo "Environment file: environments/prod.tfvars"
                     echo "=============================================="
+                    export TF_WORKSPACE="$(WORKSPACE_NAME)"
                     terraform init
                   displayName: 'Terraform Init (Prod)'
                   workingDirectory: $(System.DefaultWorkingDirectory)
 
                 - bash: |
+                    export TF_WORKSPACE="$(WORKSPACE_NAME)"
                     terraform plan \
                       -var-file=environments/prod.tfvars \
                       -out=tfplan-prod
@@ -285,6 +306,7 @@ stages:
                   workingDirectory: $(System.DefaultWorkingDirectory)
 
                 - bash: |
+                    export TF_WORKSPACE="$(WORKSPACE_NAME)"
                     terraform apply -auto-approve tfplan-prod
                   displayName: 'Terraform Apply (Prod)'
                   workingDirectory: $(System.DefaultWorkingDirectory)
