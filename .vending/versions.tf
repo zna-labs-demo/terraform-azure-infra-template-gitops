@@ -8,8 +8,13 @@
 terraform {
   required_version = ">= 1.5.0"
 
-  # Backend is configured dynamically via TF_WORKSPACE environment variable
-  # Workspace name: {app_id}-vending
+  cloud {
+    organization = "zna-labs"
+
+    workspaces {
+      tags = ["purpose:vending"]
+    }
+  }
 
   required_providers {
     tfe = {
