@@ -128,8 +128,10 @@ stages:
   # ===========================================================================
   - stage: DeployDev
     displayName: 'Deploy DEV'
-    dependsOn: Vending
-    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(stageDependencies.QualityGates.Validate.outputs['ReadConfig.DEV_ENABLED'], 'true'))
+    dependsOn:
+      - Vending
+      - QualityGates
+    condition: and(succeeded('Vending'), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(stageDependencies.QualityGates.Validate.outputs['ReadConfig.DEV_ENABLED'], 'true'))
     variables:
       DEV_ENABLED: $[ stageDependencies.QualityGates.Validate.outputs['ReadConfig.DEV_ENABLED'] ]
     jobs:
@@ -165,8 +167,10 @@ stages:
   # ===========================================================================
   - stage: DeployQa
     displayName: 'Deploy QA'
-    dependsOn: DeployDev
-    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(stageDependencies.QualityGates.Validate.outputs['ReadConfig.QA_ENABLED'], 'true'))
+    dependsOn:
+      - DeployDev
+      - QualityGates
+    condition: and(succeeded('DeployDev'), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(stageDependencies.QualityGates.Validate.outputs['ReadConfig.QA_ENABLED'], 'true'))
     jobs:
       - deployment: Qa
         displayName: 'Apply QA'
@@ -206,8 +210,10 @@ stages:
   # ===========================================================================
   - stage: DeployProd
     displayName: 'Deploy PROD'
-    dependsOn: DeployQa
-    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(stageDependencies.QualityGates.Validate.outputs['ReadConfig.PROD_ENABLED'], 'true'))
+    dependsOn:
+      - DeployQa
+      - QualityGates
+    condition: and(succeeded('DeployQa'), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(stageDependencies.QualityGates.Validate.outputs['ReadConfig.PROD_ENABLED'], 'true'))
     jobs:
       - deployment: Prod
         displayName: 'Apply PROD'
