@@ -1,26 +1,18 @@
 # =============================================================================
-# Azure DevOps CI/CD Pipeline - GitOps Vending Architecture
+# Azure DevOps Pipeline - Infrastructure Deployment
 # =============================================================================
-# This pipeline implements two-phase deployment:
+# This single pipeline handles everything:
+#   1. Validates terraform configuration
+#   2. Creates/updates TFC workspaces (vending)
+#   3. Deploys to enabled environments
 #
-# PHASE 1 - Environment Vending (.vending/):
-#   - Creates/updates TFC workspaces based on enabled environments
-#   - Runs in {app_id}-vending workspace
-#
-# PHASE 2 - Infrastructure Deployment:
-#   - Deploys actual Azure infrastructure
-#   - Only runs for enabled environments
-#   - Progressive: Dev -> QA -> Prod
+# To enable an environment: edit environments.yaml, set enabled: true, merge PR.
 # =============================================================================
 
 trigger:
   branches:
     include:
       - main
-  paths:
-    exclude:
-      - '*.md'
-      - 'docs/**'
 
 pr:
   branches:
@@ -31,12 +23,14 @@ pool:
   vmImage: 'ubuntu-latest'
 
 variables:
-  TF_VERSION: '1.9.0'
-  TF_IN_AUTOMATION: 'true'
+  - name: TF_VERSION
+    value: '1.9.0'
+  - name: TF_IN_AUTOMATION
+    value: 'true'
 
 stages:
   # ===========================================================================
-  # Stage 1: Quality Gates
+  # Stage 1: Quality Gates - Validate Configuration
   # ===========================================================================
   - stage: QualityGates
     displayName: 'Quality Gates'
@@ -56,15 +50,41 @@ stages:
               terraform validate
             displayName: 'Terraform Validate'
 
+          # Read environments.yaml and set output variables
+          - bash: |
+              # Install yq for YAML parsing
+              sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+              sudo chmod +x /usr/local/bin/yq
+
+              # Read environment enabled flags
+              DEV_ENABLED=$(yq '.environments.dev.enabled' environments.yaml)
+              QA_ENABLED=$(yq '.environments.qa.enabled' environments.yaml)
+              PROD_ENABLED=$(yq '.environments.prod.enabled' environments.yaml)
+
+              echo "DEV_ENABLED: $DEV_ENABLED"
+              echo "QA_ENABLED: $QA_ENABLED"
+              echo "PROD_ENABLED: $PROD_ENABLED"
+
+              # Set pipeline variables for use in conditions
+              echo "##vso[task.setvariable variable=DEV_ENABLED;isOutput=true]$DEV_ENABLED"
+              echo "##vso[task.setvariable variable=QA_ENABLED;isOutput=true]$QA_ENABLED"
+              echo "##vso[task.setvariable variable=PROD_ENABLED;isOutput=true]$PROD_ENABLED"
+            name: ReadConfig
+            displayName: 'Read Environment Config'
+
   # ===========================================================================
-  # Stage 2: Vend Environments
+  # Stage 2: Vending - Create/Update TFC Workspaces
   # ===========================================================================
-  - stage: VendEnvironments
-    displayName: 'Vend Environments'
+  - stage: Vending
+    displayName: 'Vending (TFC Workspaces)'
     dependsOn: QualityGates
     condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    variables:
+      DEV_ENABLED: $[ stageDependencies.QualityGates.Validate.outputs['ReadConfig.DEV_ENABLED'] ]
+      QA_ENABLED: $[ stageDependencies.QualityGates.Validate.outputs['ReadConfig.QA_ENABLED'] ]
+      PROD_ENABLED: $[ stageDependencies.QualityGates.Validate.outputs['ReadConfig.PROD_ENABLED'] ]
     jobs:
-      - job: Vend
+      - job: CreateWorkspaces
         displayName: 'Create TFC Workspaces'
         steps:
           - task: TerraformInstaller@1
@@ -72,154 +92,152 @@ stages:
               terraformVersion: $(TF_VERSION)
 
           - bash: |
-              mkdir -p ~/.terraform.d
-              cat > ~/.terraform.d/credentials.tfrc.json << EOF
-              {
-                "credentials": {
-                  "app.terraform.io": {
-                    "token": "$(TFC_TOKEN)"
-                  }
-                }
-              }
-              EOF
-            displayName: 'Configure TFC'
+              # Extract APP_ID from repo name
+              REPO_NAME="$(Build.Repository.Name)"
+              APP_ID=$(echo "$REPO_NAME" | rev | cut -d'/' -f1 | rev | sed 's/^terraform-azure-infra-//')
+              echo "##vso[task.setvariable variable=APP_ID]$APP_ID"
+              echo "APP_ID: $APP_ID"
+            displayName: 'Extract App ID'
 
           - bash: |
-              REPO_NAME="$(Build.Repository.Name)"
-              APP_ID="${REPO_NAME##*/}"
-              APP_ID="${APP_ID#terraform-azure-infra-}"
-              echo "##vso[task.setvariable variable=APP_ID]${APP_ID}"
+              mkdir -p ~/.terraform.d
+              echo "{\"credentials\":{\"app.terraform.io\":{\"token\":\"$TFC_TOKEN\"}}}" > ~/.terraform.d/credentials.tfrc.json
+            displayName: 'Configure TFC'
+            env:
+              TFC_TOKEN: $(TFC_TOKEN)
 
+          - bash: |
               echo "=============================================="
-              echo "Vending: ${APP_ID}-vending"
+              echo "Vending: $(APP_ID)-vending"
               echo "=============================================="
+              echo "DEV_ENABLED: $(DEV_ENABLED)"
+              echo "QA_ENABLED: $(QA_ENABLED)"
+              echo "PROD_ENABLED: $(PROD_ENABLED)"
 
               cd .vending
-              export TF_WORKSPACE="${APP_ID}-vending"
+              export TF_WORKSPACE="$(APP_ID)-vending"
               terraform init
-              terraform apply -auto-approve
+              terraform apply -auto-approve \
+                -var="dev_enabled=$(DEV_ENABLED)" \
+                -var="qa_enabled=$(QA_ENABLED)" \
+                -var="prod_enabled=$(PROD_ENABLED)"
             displayName: 'Apply Vending'
 
-          - bash: |
-              pip install pyyaml -q
-              python3 << 'PYEOF'
-              import yaml
-              with open('environments.yaml', 'r') as f:
-                  config = yaml.safe_load(f)
-              for env in config.get('environments', []):
-                  name = env.get('name', '').upper()
-                  enabled = str(env.get('enabled', False)).lower()
-                  print(f"##vso[task.setvariable variable={name}_ENABLED;isOutput=true]{enabled}")
-              PYEOF
-            displayName: 'Parse Environments'
-            name: envConfig
-
   # ===========================================================================
-  # Stage 3: Deploy Dev
+  # Stage 3: Deploy DEV (auto-approve)
   # ===========================================================================
   - stage: DeployDev
-    displayName: 'Deploy Dev'
-    dependsOn: VendEnvironments
-    condition: and(succeeded(), eq(dependencies.VendEnvironments.outputs['Vend.envConfig.DEV_ENABLED'], 'true'))
+    displayName: 'Deploy DEV'
+    dependsOn: Vending
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(stageDependencies.QualityGates.Validate.outputs['ReadConfig.DEV_ENABLED'], 'true'))
+    variables:
+      DEV_ENABLED: $[ stageDependencies.QualityGates.Validate.outputs['ReadConfig.DEV_ENABLED'] ]
     jobs:
       - job: Dev
+        displayName: 'Apply DEV'
         steps:
           - task: TerraformInstaller@1
             inputs:
               terraformVersion: $(TF_VERSION)
 
           - bash: |
-              mkdir -p ~/.terraform.d
-              cat > ~/.terraform.d/credentials.tfrc.json << EOF
-              {"credentials":{"app.terraform.io":{"token":"$(TFC_TOKEN)"}}}
-              EOF
-            displayName: 'Configure TFC'
+              REPO_NAME="$(Build.Repository.Name)"
+              APP_ID=$(echo "$REPO_NAME" | rev | cut -d'/' -f1 | rev | sed 's/^terraform-azure-infra-//')
+              echo "##vso[task.setvariable variable=APP_ID]$APP_ID"
+            displayName: 'Extract App ID'
 
           - bash: |
-              REPO_NAME="$(Build.Repository.Name)"
-              APP_ID="${REPO_NAME##*/}"
-              APP_ID="${APP_ID#terraform-azure-infra-}"
+              mkdir -p ~/.terraform.d
+              echo "{\"credentials\":{\"app.terraform.io\":{\"token\":\"$TFC_TOKEN\"}}}" > ~/.terraform.d/credentials.tfrc.json
+            displayName: 'Configure TFC'
+            env:
+              TFC_TOKEN: $(TFC_TOKEN)
 
-              echo "Deploying: ${APP_ID}n1d01"
-              export TF_WORKSPACE="${APP_ID}n1d01"
+          - bash: |
+              echo "Deploying to workspace: $(APP_ID)n1d01"
+              export TF_WORKSPACE="$(APP_ID)n1d01"
               terraform init
               terraform apply -auto-approve
-            displayName: 'Apply Dev'
+            displayName: 'Apply DEV'
 
   # ===========================================================================
-  # Stage 4: Deploy QA
+  # Stage 4: Deploy QA (requires approval)
   # ===========================================================================
-  - stage: DeployQA
+  - stage: DeployQa
     displayName: 'Deploy QA'
-    dependsOn:
-      - VendEnvironments
-      - DeployDev
-    condition: and(succeeded(), eq(dependencies.VendEnvironments.outputs['Vend.envConfig.QA_ENABLED'], 'true'))
+    dependsOn: DeployDev
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(stageDependencies.QualityGates.Validate.outputs['ReadConfig.QA_ENABLED'], 'true'))
     jobs:
-      - deployment: QA
+      - deployment: Qa
+        displayName: 'Apply QA'
         environment: 'QA'
         strategy:
           runOnce:
             deploy:
               steps:
                 - checkout: self
+
                 - task: TerraformInstaller@1
                   inputs:
                     terraformVersion: $(TF_VERSION)
 
                 - bash: |
-                    mkdir -p ~/.terraform.d
-                    cat > ~/.terraform.d/credentials.tfrc.json << EOF
-                    {"credentials":{"app.terraform.io":{"token":"$(TFC_TOKEN)"}}}
-                    EOF
-                  displayName: 'Configure TFC'
+                    REPO_NAME="$(Build.Repository.Name)"
+                    APP_ID=$(echo "$REPO_NAME" | rev | cut -d'/' -f1 | rev | sed 's/^terraform-azure-infra-//')
+                    echo "##vso[task.setvariable variable=APP_ID]$APP_ID"
+                  displayName: 'Extract App ID'
 
                 - bash: |
-                    REPO_NAME="$(Build.Repository.Name)"
-                    APP_ID="${REPO_NAME##*/}"
-                    APP_ID="${APP_ID#terraform-azure-infra-}"
+                    mkdir -p ~/.terraform.d
+                    echo "{\"credentials\":{\"app.terraform.io\":{\"token\":\"$TFC_TOKEN\"}}}" > ~/.terraform.d/credentials.tfrc.json
+                  displayName: 'Configure TFC'
+                  env:
+                    TFC_TOKEN: $(TFC_TOKEN)
 
-                    echo "Deploying: ${APP_ID}n1q01"
-                    export TF_WORKSPACE="${APP_ID}n1q01"
+                - bash: |
+                    echo "Deploying to workspace: $(APP_ID)n1q01"
+                    export TF_WORKSPACE="$(APP_ID)n1q01"
                     terraform init
                     terraform apply -auto-approve
                   displayName: 'Apply QA'
 
   # ===========================================================================
-  # Stage 5: Deploy Prod
+  # Stage 5: Deploy PROD (requires approval)
   # ===========================================================================
   - stage: DeployProd
-    displayName: 'Deploy Prod'
-    dependsOn:
-      - VendEnvironments
-      - DeployQA
-    condition: and(succeeded(), eq(dependencies.VendEnvironments.outputs['Vend.envConfig.PROD_ENABLED'], 'true'))
+    displayName: 'Deploy PROD'
+    dependsOn: DeployQa
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(stageDependencies.QualityGates.Validate.outputs['ReadConfig.PROD_ENABLED'], 'true'))
     jobs:
       - deployment: Prod
+        displayName: 'Apply PROD'
         environment: 'Production'
         strategy:
           runOnce:
             deploy:
               steps:
                 - checkout: self
+
                 - task: TerraformInstaller@1
                   inputs:
                     terraformVersion: $(TF_VERSION)
 
                 - bash: |
-                    mkdir -p ~/.terraform.d
-                    cat > ~/.terraform.d/credentials.tfrc.json << EOF
-                    {"credentials":{"app.terraform.io":{"token":"$(TFC_TOKEN)"}}}
-                    EOF
-                  displayName: 'Configure TFC'
+                    REPO_NAME="$(Build.Repository.Name)"
+                    APP_ID=$(echo "$REPO_NAME" | rev | cut -d'/' -f1 | rev | sed 's/^terraform-azure-infra-//')
+                    echo "##vso[task.setvariable variable=APP_ID]$APP_ID"
+                  displayName: 'Extract App ID'
 
                 - bash: |
-                    REPO_NAME="$(Build.Repository.Name)"
-                    APP_ID="${REPO_NAME##*/}"
-                    APP_ID="${APP_ID#terraform-azure-infra-}"
+                    mkdir -p ~/.terraform.d
+                    echo "{\"credentials\":{\"app.terraform.io\":{\"token\":\"$TFC_TOKEN\"}}}" > ~/.terraform.d/credentials.tfrc.json
+                  displayName: 'Configure TFC'
+                  env:
+                    TFC_TOKEN: $(TFC_TOKEN)
 
-                    echo "Deploying: ${APP_ID}p1p01"
-                    export TF_WORKSPACE="${APP_ID}p1p01"
+                - bash: |
+                    echo "Deploying to workspace: $(APP_ID)p1p01"
+                    export TF_WORKSPACE="$(APP_ID)p1p01"
                     terraform init
                     terraform apply -auto-approve
-                  displayName: 'Apply Prod'
+                  displayName: 'Apply PROD'

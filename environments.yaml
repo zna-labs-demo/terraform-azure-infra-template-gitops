@@ -1,44 +1,19 @@
 # =============================================================================
 # Environment Configuration
 # =============================================================================
-# Edit this file to enable/disable environments for your application.
-# When you merge changes to main, the pipeline will:
-#   1. Run .vending/ terraform to create/update TFC workspaces
-#   2. Deploy infrastructure to enabled environments
-#
-# To enable an environment:
-#   1. Set enabled: true
-#   2. Create a PR
-#   3. Get approval and merge
+# To enable an environment: set enabled: true, create a PR, and merge.
+# That's it! The pipeline handles everything else.
 # =============================================================================
 
 environments:
-  # ---------------------------------------------------------------------------
-  # Development Environment
-  # ---------------------------------------------------------------------------
-  - name: dev
-    tier: "n"                    # n = non-prod
-    environment_code: d        # d = dev
-    sequence: "01"
-    auto_apply: true           # Auto-apply after successful plan
-    enabled: true              # Dev enabled by default
+  dev:
+    enabled: false        # Set to true when ready for DEV
+    auto_approve: true    # DEV deploys automatically (no approval gate)
 
-  # ---------------------------------------------------------------------------
-  # QA Environment
-  # ---------------------------------------------------------------------------
-  - name: qa
-    tier: "n"                    # n = non-prod
-    environment_code: q        # q = qa
-    sequence: "01"
-    auto_apply: false          # Require manual approval
-    enabled: false             # Enable when ready for QA testing
+  qa:
+    enabled: false        # Set to true when ready for QA
+    auto_approve: false   # QA requires manual approval
 
-  # ---------------------------------------------------------------------------
-  # Production Environment
-  # ---------------------------------------------------------------------------
-  - name: prod
-    tier: "p"                    # p = prod
-    environment_code: p        # p = prod
-    sequence: "01"
-    auto_apply: false          # Always require manual approval
-    enabled: false             # Enable when ready for production
+  prod:
+    enabled: false        # Set to true when ready for Production
+    auto_approve: false   # PROD requires manual approval

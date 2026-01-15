@@ -53,3 +53,24 @@ variable "azure_subscription_id" {
   description = "Azure Subscription ID"
   type        = string
 }
+
+# -----------------------------------------------------------------------------
+# Environment Enablement (passed from pipeline via -var)
+# -----------------------------------------------------------------------------
+variable "dev_enabled" {
+  description = "Whether DEV environment is enabled"
+  type        = bool
+  default     = false
+}
+
+variable "qa_enabled" {
+  description = "Whether QA environment is enabled"
+  type        = bool
+  default     = false
+}
+
+variable "prod_enabled" {
+  description = "Whether PROD environment is enabled"
+  type        = bool
+  default     = false
+}
