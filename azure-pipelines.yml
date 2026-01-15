@@ -52,23 +52,23 @@ stages:
 
           # Read environments.yaml and set output variables
           - bash: |
-              # Install yq for YAML parsing
-              sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-              sudo chmod +x /usr/local/bin/yq
+              set -x  # Debug mode
 
-              # Read environment enabled flags
-              DEV_ENABLED=$(yq '.environments.dev.enabled' environments.yaml)
-              QA_ENABLED=$(yq '.environments.qa.enabled' environments.yaml)
-              PROD_ENABLED=$(yq '.environments.prod.enabled' environments.yaml)
+              # Parse YAML with grep (simpler than yq)
+              DEV_ENABLED=$(grep -A1 "dev:" environments.yaml | grep "enabled:" | awk '{print $2}')
+              QA_ENABLED=$(grep -A1 "qa:" environments.yaml | grep "enabled:" | awk '{print $2}')
+              PROD_ENABLED=$(grep -A1 "prod:" environments.yaml | grep "enabled:" | awk '{print $2}')
 
-              echo "DEV_ENABLED: $DEV_ENABLED"
-              echo "QA_ENABLED: $QA_ENABLED"
-              echo "PROD_ENABLED: $PROD_ENABLED"
+              echo "DEV_ENABLED: [$DEV_ENABLED]"
+              echo "QA_ENABLED: [$QA_ENABLED]"
+              echo "PROD_ENABLED: [$PROD_ENABLED]"
 
               # Set pipeline variables for use in conditions
               echo "##vso[task.setvariable variable=DEV_ENABLED;isOutput=true]$DEV_ENABLED"
               echo "##vso[task.setvariable variable=QA_ENABLED;isOutput=true]$QA_ENABLED"
               echo "##vso[task.setvariable variable=PROD_ENABLED;isOutput=true]$PROD_ENABLED"
+
+              echo "Variables set successfully"
             name: ReadConfig
             displayName: 'Read Environment Config'
 
@@ -121,6 +121,12 @@ stages:
                 -var="dev_enabled=$(DEV_ENABLED)" \
                 -var="qa_enabled=$(QA_ENABLED)" \
                 -var="prod_enabled=$(PROD_ENABLED)"
+
+              # Pass through enabled flags as output variables for deploy stages
+              echo "##vso[task.setvariable variable=DEV_ENABLED;isOutput=true]$(DEV_ENABLED)"
+              echo "##vso[task.setvariable variable=QA_ENABLED;isOutput=true]$(QA_ENABLED)"
+              echo "##vso[task.setvariable variable=PROD_ENABLED;isOutput=true]$(PROD_ENABLED)"
+            name: ApplyVending
             displayName: 'Apply Vending'
 
   # ===========================================================================
@@ -128,12 +134,8 @@ stages:
   # ===========================================================================
   - stage: DeployDev
     displayName: 'Deploy DEV'
-    dependsOn:
-      - Vending
-      - QualityGates
-    condition: and(succeeded('Vending'), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(stageDependencies.QualityGates.Validate.outputs['ReadConfig.DEV_ENABLED'], 'true'))
-    variables:
-      DEV_ENABLED: $[ stageDependencies.QualityGates.Validate.outputs['ReadConfig.DEV_ENABLED'] ]
+    dependsOn: Vending
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(stageDependencies.Vending.CreateWorkspaces.outputs['ApplyVending.DEV_ENABLED'], 'true'))
     jobs:
       - job: Dev
         displayName: 'Apply DEV'
@@ -169,8 +171,8 @@ stages:
     displayName: 'Deploy QA'
     dependsOn:
       - DeployDev
-      - QualityGates
-    condition: and(succeeded('DeployDev'), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(stageDependencies.QualityGates.Validate.outputs['ReadConfig.QA_ENABLED'], 'true'))
+      - Vending
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(stageDependencies.Vending.CreateWorkspaces.outputs['ApplyVending.QA_ENABLED'], 'true'))
     jobs:
       - deployment: Qa
         displayName: 'Apply QA'
@@ -212,8 +214,8 @@ stages:
     displayName: 'Deploy PROD'
     dependsOn:
       - DeployQa
-      - QualityGates
-    condition: and(succeeded('DeployQa'), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(stageDependencies.QualityGates.Validate.outputs['ReadConfig.PROD_ENABLED'], 'true'))
+      - Vending
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(stageDependencies.Vending.CreateWorkspaces.outputs['ApplyVending.PROD_ENABLED'], 'true'))
     jobs:
       - deployment: Prod
         displayName: 'Apply PROD'
