@@ -57,15 +57,18 @@ stages:
               # Parse YAML with grep (simpler than yq)
               DEV_ENABLED=$(grep -A1 "dev:" environments.yaml | grep "enabled:" | awk '{print $2}')
               QA_ENABLED=$(grep -A1 "qa:" environments.yaml | grep "enabled:" | awk '{print $2}')
+              TEST_ENABLED=$(grep -A1 "test:" environments.yaml | grep "enabled:" | awk '{print $2}')
               PROD_ENABLED=$(grep -A1 "prod:" environments.yaml | grep "enabled:" | awk '{print $2}')
 
               echo "DEV_ENABLED: [$DEV_ENABLED]"
               echo "QA_ENABLED: [$QA_ENABLED]"
+              echo "TEST_ENABLED: [$TEST_ENABLED]"
               echo "PROD_ENABLED: [$PROD_ENABLED]"
 
               # Set pipeline variables for use in conditions
               echo "##vso[task.setvariable variable=DEV_ENABLED;isOutput=true]$DEV_ENABLED"
               echo "##vso[task.setvariable variable=QA_ENABLED;isOutput=true]$QA_ENABLED"
+              echo "##vso[task.setvariable variable=TEST_ENABLED;isOutput=true]$TEST_ENABLED"
               echo "##vso[task.setvariable variable=PROD_ENABLED;isOutput=true]$PROD_ENABLED"
 
               echo "Variables set successfully"
@@ -82,6 +85,7 @@ stages:
     variables:
       DEV_ENABLED: $[ stageDependencies.QualityGates.Validate.outputs['ReadConfig.DEV_ENABLED'] ]
       QA_ENABLED: $[ stageDependencies.QualityGates.Validate.outputs['ReadConfig.QA_ENABLED'] ]
+      TEST_ENABLED: $[ stageDependencies.QualityGates.Validate.outputs['ReadConfig.TEST_ENABLED'] ]
       PROD_ENABLED: $[ stageDependencies.QualityGates.Validate.outputs['ReadConfig.PROD_ENABLED'] ]
     jobs:
       - job: CreateWorkspaces
@@ -108,23 +112,17 @@ stages:
 
           - bash: |
               echo "=============================================="
-              echo "Vending: $(APP_ID)-vending"
+              echo "Vending workspace (variables set by central vending)"
               echo "=============================================="
-              echo "DEV_ENABLED: $(DEV_ENABLED)"
-              echo "QA_ENABLED: $(QA_ENABLED)"
-              echo "PROD_ENABLED: $(PROD_ENABLED)"
 
               cd .vending
-              export TF_WORKSPACE="$(APP_ID)-vending"
               terraform init
-              terraform apply -auto-approve \
-                -var="dev_enabled=$(DEV_ENABLED)" \
-                -var="qa_enabled=$(QA_ENABLED)" \
-                -var="prod_enabled=$(PROD_ENABLED)"
+              terraform apply -auto-approve
 
               # Pass through enabled flags as output variables for deploy stages
               echo "##vso[task.setvariable variable=DEV_ENABLED;isOutput=true]$(DEV_ENABLED)"
               echo "##vso[task.setvariable variable=QA_ENABLED;isOutput=true]$(QA_ENABLED)"
+              echo "##vso[task.setvariable variable=TEST_ENABLED;isOutput=true]$(TEST_ENABLED)"
               echo "##vso[task.setvariable variable=PROD_ENABLED;isOutput=true]$(PROD_ENABLED)"
             name: ApplyVending
             displayName: 'Apply Vending'
@@ -165,12 +163,55 @@ stages:
             displayName: 'Apply DEV'
 
   # ===========================================================================
-  # Stage 4: Deploy QA (requires approval)
+  # Stage 4: Deploy TEST (requires approval)
+  # ===========================================================================
+  - stage: DeployTest
+    displayName: 'Deploy TEST'
+    dependsOn:
+      - DeployDev
+      - Vending
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(stageDependencies.Vending.CreateWorkspaces.outputs['ApplyVending.TEST_ENABLED'], 'true'))
+    jobs:
+      - deployment: Test
+        displayName: 'Apply TEST'
+        environment: 'Test'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: TerraformInstaller@1
+                  inputs:
+                    terraformVersion: $(TF_VERSION)
+
+                - bash: |
+                    REPO_NAME="$(Build.Repository.Name)"
+                    APP_ID=$(echo "$REPO_NAME" | rev | cut -d'/' -f1 | rev | sed 's/^terraform-azure-infra-//')
+                    echo "##vso[task.setvariable variable=APP_ID]$APP_ID"
+                  displayName: 'Extract App ID'
+
+                - bash: |
+                    mkdir -p ~/.terraform.d
+                    echo "{\"credentials\":{\"app.terraform.io\":{\"token\":\"$TFC_TOKEN\"}}}" > ~/.terraform.d/credentials.tfrc.json
+                  displayName: 'Configure TFC'
+                  env:
+                    TFC_TOKEN: $(TFC_TOKEN)
+
+                - bash: |
+                    echo "Deploying to workspace: $(APP_ID)n1t01"
+                    export TF_WORKSPACE="$(APP_ID)n1t01"
+                    terraform init
+                    terraform apply -auto-approve
+                  displayName: 'Apply TEST'
+
+  # ===========================================================================
+  # Stage 5: Deploy QA (requires approval)
   # ===========================================================================
   - stage: DeployQa
     displayName: 'Deploy QA'
     dependsOn:
-      - DeployDev
+      - DeployTest
       - Vending
     condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(stageDependencies.Vending.CreateWorkspaces.outputs['ApplyVending.QA_ENABLED'], 'true'))
     jobs:
@@ -208,7 +249,7 @@ stages:
                   displayName: 'Apply QA'
 
   # ===========================================================================
-  # Stage 5: Deploy PROD (requires approval)
+  # Stage 6: Deploy PROD (requires approval)
   # ===========================================================================
   - stage: DeployProd
     displayName: 'Deploy PROD'

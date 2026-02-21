@@ -14,6 +14,10 @@ environments:
     enabled: false        # Set to true when ready for QA
     auto_approve: false   # QA requires manual approval
 
+  test:
+    enabled: false        # Set to true when ready for TEST
+    auto_approve: false   # TEST requires manual approval
+
   prod:
     enabled: false        # Set to true when ready for Production
     auto_approve: false   # PROD requires manual approval

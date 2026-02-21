@@ -1,53 +1,49 @@
 # =============================================================================
 # Local Values - Environment Vending
 # =============================================================================
-# Uses var.dev_enabled, var.qa_enabled, var.prod_enabled from pipeline
-# and environments.yaml for auto_approve settings
+# Matches the environments array (from central vending via TF_VAR_environments)
+# against environments.yaml (in-repo enablement) to determine which
+# environment workspaces to create.
 # =============================================================================
 
 locals {
   # ---------------------------------------------------------------------------
-  # Load and parse environment configuration (for auto_approve settings)
+  # Load and parse environment configuration (for enabled + auto_approve)
   # ---------------------------------------------------------------------------
   config = yamldecode(file("${path.module}/../environments.yaml"))
 
   # ---------------------------------------------------------------------------
-  # Environment definitions with standard naming convention
-  # Workspace naming: {app_id}{tier}1{env_code}{sequence}
-  #   - DEV:  {app_id}n1d01
-  #   - QA:   {app_id}n1q01
-  #   - PROD: {app_id}p1p01
+  # Map sub_environment prefix letter to environment name
   # ---------------------------------------------------------------------------
-  environment_definitions = {
-    dev = {
-      tier             = "n"
-      environment_code = "d"
-      sequence         = "01"
-      auto_apply       = lookup(local.config.environments.dev, "auto_approve", true)
-    }
-    qa = {
-      tier             = "n"
-      environment_code = "q"
-      sequence         = "01"
-      auto_apply       = lookup(local.config.environments.qa, "auto_approve", false)
-    }
-    prod = {
-      tier             = "p"
-      environment_code = "p"
-      sequence         = "01"
-      auto_apply       = lookup(local.config.environments.prod, "auto_approve", false)
+  sub_env_to_name = {
+    "d" = "dev"
+    "q" = "qa"
+    "t" = "test"
+    "p" = "prod"
+  }
+
+  # ---------------------------------------------------------------------------
+  # Convert environments array to map keyed by environment name
+  # ---------------------------------------------------------------------------
+  env_configs = {
+    for env in var.environments :
+    local.sub_env_to_name[substr(env.sub_environment, 0, 1)] => {
+      environment     = env.environment
+      sub_environment = env.sub_environment
+      subscription_id = env.subscription_id
+      tier_letter     = substr(env.environment, 0, 1)
+      env_code_letter = substr(env.sub_environment, 0, 1)
+      sequence        = substr(env.sub_environment, 1, 2)
     }
   }
 
   # ---------------------------------------------------------------------------
-  # Filter to only enabled environments (using var inputs from pipeline)
+  # Filter to only enabled environments (from environments.yaml)
   # ---------------------------------------------------------------------------
   enabled_environments = {
-    for name, env in local.environment_definitions :
+    for name, env in local.env_configs :
     name => env
-    if (name == "dev" && var.dev_enabled) ||
-       (name == "qa" && var.qa_enabled) ||
-       (name == "prod" && var.prod_enabled)
+    if lookup(lookup(local.config.environments, name, {}), "enabled", false)
   }
 
   # ---------------------------------------------------------------------------
@@ -56,20 +52,17 @@ locals {
   workspace_configs = {
     for name, env in local.enabled_environments :
     name => {
-      # Workspace name: {app_id}{tier}1{env_code}{sequence}
-      workspace_name   = "${var.app_id}${env.tier}1${env.environment_code}${env.sequence}"
+      # Workspace name: {app_id}{environment}{sub_environment}
+      workspace_name   = "${var.app_id}${env.environment}${env.sub_environment}"
       environment_name = name
-      tier             = env.tier
-      environment_code = env.environment_code
+      tier             = env.tier_letter
+      environment_code = env.env_code_letter
       sequence         = env.sequence
-      auto_apply       = env.auto_apply
+      subscription_id  = env.subscription_id
+      auto_apply       = lookup(lookup(local.config.environments, name, {}), "auto_approve", name == "dev")
 
       # Calculate subnet CIDRs from app's VNet CIDR
-      # App VNet: 10.X.0.0/16
-      # Dev subnets: 10.X.0.0/24, 10.X.1.0/24, 10.X.2.0/26
-      # QA subnets:  10.X.10.0/24, 10.X.11.0/24, 10.X.12.0/26
-      # Prod subnets: 10.X.20.0/24, 10.X.21.0/24, 10.X.22.0/26
-      subnet_offset = name == "dev" ? 0 : (name == "qa" ? 10 : 20)
+      subnet_offset = name == "dev" ? 0 : (name == "qa" ? 10 : (name == "test" ? 15 : 20))
     }
   }
 }

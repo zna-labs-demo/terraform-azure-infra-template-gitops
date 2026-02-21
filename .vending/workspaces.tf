@@ -69,10 +69,10 @@ resource "tfe_variable" "arm_subscription_id" {
   for_each = local.workspace_configs
 
   key          = "ARM_SUBSCRIPTION_ID"
-  value        = var.azure_subscription_id
+  value        = each.value.subscription_id != "" ? each.value.subscription_id : var.azure_subscription_id
   category     = "env"
   workspace_id = tfe_workspace.environment[each.key].id
-  description  = "Azure Subscription ID"
+  description  = "Azure Subscription ID (per-environment from central vending)"
 }
 
 # =============================================================================

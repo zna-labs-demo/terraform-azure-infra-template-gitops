@@ -51,8 +51,8 @@ variable "environment_code" {
   default     = "d"
 
   validation {
-    condition     = contains(["d", "q", "p"], var.environment_code)
-    error_message = "environment_code must be 'd' (dev), 'q' (qa), or 'p' (prod)."
+    condition     = contains(["d", "q", "t", "p"], var.environment_code)
+    error_message = "environment_code must be 'd' (dev), 'q' (qa), 't' (test), or 'p' (prod)."
   }
 }
 

@@ -50,27 +50,19 @@ variable "azure_tenant_id" {
 }
 
 variable "azure_subscription_id" {
-  description = "Azure Subscription ID"
+  description = "Azure Subscription ID (fallback default; per-environment values come from the environments array)"
   type        = string
 }
 
 # -----------------------------------------------------------------------------
-# Environment Enablement (passed from pipeline via -var)
+# Environment Configurations (set by central vending from main.apps.json)
 # -----------------------------------------------------------------------------
-variable "dev_enabled" {
-  description = "Whether DEV environment is enabled"
-  type        = bool
-  default     = false
-}
-
-variable "qa_enabled" {
-  description = "Whether QA environment is enabled"
-  type        = bool
-  default     = false
-}
-
-variable "prod_enabled" {
-  description = "Whether PROD environment is enabled"
-  type        = bool
-  default     = false
+variable "environments" {
+  description = "List of environment configurations from central vending (environment tier, sub_environment code, and subscription_id)"
+  type = list(object({
+    environment     = string
+    sub_environment = string
+    subscription_id = string
+  }))
+  default = []
 }
