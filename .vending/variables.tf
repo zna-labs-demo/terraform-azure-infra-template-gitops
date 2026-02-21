@@ -31,21 +31,10 @@ variable "vnet_cidr" {
 }
 
 # -----------------------------------------------------------------------------
-# Azure Credentials (passed through to environment workspaces)
+# Azure OIDC (passed through from Phase 1 variable set)
 # -----------------------------------------------------------------------------
-variable "azure_client_id" {
-  description = "Azure Service Principal Client ID"
-  type        = string
-}
-
-variable "azure_client_secret" {
-  description = "Azure Service Principal Client Secret"
-  type        = string
-  sensitive   = true
-}
-
-variable "azure_tenant_id" {
-  description = "Azure Tenant ID"
+variable "azure_oidc_variable_set_id" {
+  description = "TFC Variable Set ID containing Azure OIDC credentials for this app"
   type        = string
 }
 

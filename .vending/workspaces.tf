@@ -17,7 +17,7 @@ resource "tfe_workspace" "environment" {
   execution_mode    = "remote"
   auto_apply        = each.value.auto_apply
   queue_all_runs    = false
-  working_directory = ""  # Root of repo (infrastructure is in main.tf, etc.)
+  working_directory = "" # Root of repo (infrastructure is in main.tf, etc.)
   force_delete      = true
 
   tag_names = [
@@ -31,39 +31,28 @@ resource "tfe_workspace" "environment" {
 }
 
 # =============================================================================
-# Workspace Variables - Azure Credentials
+# Attach Azure OIDC Variable Set to each environment workspace
+# =============================================================================
+# The variable set (created by Phase 1) provides:
+# - TFC_AZURE_PROVIDER_AUTH = true
+# - TFC_AZURE_RUN_CLIENT_ID = {app-specific client ID}
+# - ARM_TENANT_ID
+# - ARM_SUBSCRIPTION_ID (default; overridden per-environment below)
 # =============================================================================
 
-resource "tfe_variable" "arm_client_id" {
+resource "tfe_workspace_variable_set" "azure_oidc" {
   for_each = local.workspace_configs
 
-  key          = "ARM_CLIENT_ID"
-  value        = var.azure_client_id
-  category     = "env"
-  workspace_id = tfe_workspace.environment[each.key].id
-  description  = "Azure Service Principal Client ID"
+  workspace_id    = tfe_workspace.environment[each.key].id
+  variable_set_id = var.azure_oidc_variable_set_id
 }
 
-resource "tfe_variable" "arm_client_secret" {
-  for_each = local.workspace_configs
-
-  key          = "ARM_CLIENT_SECRET"
-  value        = var.azure_client_secret
-  category     = "env"
-  sensitive    = true
-  workspace_id = tfe_workspace.environment[each.key].id
-  description  = "Azure Service Principal Client Secret"
-}
-
-resource "tfe_variable" "arm_tenant_id" {
-  for_each = local.workspace_configs
-
-  key          = "ARM_TENANT_ID"
-  value        = var.azure_tenant_id
-  category     = "env"
-  workspace_id = tfe_workspace.environment[each.key].id
-  description  = "Azure Tenant ID"
-}
+# =============================================================================
+# Per-Environment Subscription ID Override
+# =============================================================================
+# Workspace variables override variable set values, so this per-environment
+# subscription_id takes precedence over the default in the OIDC variable set.
+# =============================================================================
 
 resource "tfe_variable" "arm_subscription_id" {
   for_each = local.workspace_configs
@@ -96,7 +85,7 @@ resource "tfe_variable" "environment" {
   value        = each.value.environment_name
   category     = "terraform"
   workspace_id = tfe_workspace.environment[each.key].id
-  description  = "Environment name (dev/qa/prod)"
+  description  = "Environment name (dev/qa/test/prod)"
 }
 
 resource "tfe_variable" "tier" {
@@ -116,7 +105,7 @@ resource "tfe_variable" "environment_code" {
   value        = each.value.environment_code
   category     = "terraform"
   workspace_id = tfe_workspace.environment[each.key].id
-  description  = "Environment code (d=dev, q=qa, p=prod)"
+  description  = "Environment code (d=dev, q=qa, t=test, p=prod)"
 }
 
 resource "tfe_variable" "sequence" {
